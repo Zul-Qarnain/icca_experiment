@@ -70,8 +70,8 @@ def main():
             print(f"Row {i+1}/100 completed in {time.time()-start:.2f}s")
             time.sleep(12) # Free Tier Rate Limit Protection
             
-            if (i + 1) % 5 == 0:
-                pd.DataFrame(results).to_csv(f"result/baseline_{dataset_key}", index=False)
+            # Save row-by-row to prevent data loss
+            pd.DataFrame(results).to_csv(f"result/baseline_{dataset_key}", index=False)
 
 if __name__ == "__main__":
     main()
