@@ -8,8 +8,8 @@ from core.prompts import ZERO_SHOT, FEW_SHOT_STANDARD
 from core.parser import extract_label
 from phase2_run_baselines import configure_dataset, DATASETS
 
-# Load Key (Specified as OPENROUTER_API_KEY_PHASE3 for NVIDIA via OpenRouter)
-OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY_PHASE3")
+# Load Key (Official Enterprise NVIDIA API Key)
+NVIDIA_KEY = os.getenv("NVIDIA_API_KEY")
 
 def make_request_with_retry(url, headers, payload, timeout=60):
     """Exponential backoff to handle free-tier Rate Limits (HTTP 429)."""
@@ -29,18 +29,16 @@ def make_request_with_retry(url, headers, payload, timeout=60):
             time.sleep(2 ** attempt)
     return None
 
-def call_nvidia_via_openrouter(prompt_sys, prompt_user, enable_thinking=True, mode='standard'):
-    # Using OpenRouter endpoint as requested
-    url = "https://openrouter.ai/api/v1/chat/completions"
+def call_nvidia_nim(prompt_sys, prompt_user, mode='standard'):
+    # Official NVIDIA NIM Enterprise API (OpenAI-compatible)
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/gemini-cli", # Required by OpenRouter
-        "X-Title": "LLM Tabular Experiment"
+        "Authorization": f"Bearer {NVIDIA_KEY}",
+        "Content-Type": "application/json"
     }
     
-    # Model name on OpenRouter for Nemotron 70B
-    model_name = "nvidia/llama-3.1-nemotron-70b-instruct" 
+    # Updated model for Enterprise NIM
+    model_name = "nvidia/nemotron-3-super-120b-a12b" 
     
     payload = {
         "model": model_name,
@@ -48,7 +46,8 @@ def call_nvidia_via_openrouter(prompt_sys, prompt_user, enable_thinking=True, mo
             {"role": "system", "content": prompt_sys},
             {"role": "user", "content": prompt_user}
         ],
-        "temperature": 0.1
+        "temperature": 0.1,
+        "max_tokens": 1024
     }
     
     res = make_request_with_retry(url, headers, payload)
@@ -62,8 +61,8 @@ def call_nvidia_via_openrouter(prompt_sys, prompt_user, enable_thinking=True, mo
     return "Error", -2
 
 def main():
-    if not OPENROUTER_KEY:
-        print("Error: OPENROUTER_API_KEY_PHASE3 not found in environment.")
+    if not NVIDIA_KEY:
+        print("Error: NVIDIA_API_KEY not found in environment.")
         return
 
     os.makedirs("result", exist_ok=True)
@@ -77,7 +76,7 @@ def main():
         results = []
         
         output_file = f"result/phase3_nvidia_{dataset_key}"
-        print(f"\n--- Running NVIDIA Nemotron (via OpenRouter) for {dataset_key} ---")
+        print(f"\n--- Running NVIDIA Enterprise NIM for {dataset_key} ---")
         
         for i, row in sample.iterrows():
             start = time.time()
@@ -91,8 +90,8 @@ def main():
             # NVIDIA Native Architectural Reasoning (ZS and FS)
             with ThreadPoolExecutor(max_workers=2) as exe:
                 tasks = {
-                    exe.submit(call_nvidia_via_openrouter, p_zs, text_row, True, 'standard'): "Nemotron_Native_ZS",
-                    exe.submit(call_nvidia_via_openrouter, p_fs, text_row, True, 'standard'): "Nemotron_Native_FS",
+                    exe.submit(call_nvidia_nim, p_zs, text_row, 'standard'): "Nemotron_Native_ZS",
+                    exe.submit(call_nvidia_nim, p_fs, text_row, 'standard'): "Nemotron_Native_FS",
                 }
                 for f in as_completed(tasks):
                     tag = tasks[f]
@@ -108,7 +107,7 @@ def main():
             # Row-by-row checkpointing
             pd.DataFrame(results).to_csv(output_file, index=False)
             
-            time.sleep(2) # Rate limit protection
+            time.sleep(1) # Enterprise API generally has higher limits
 
 if __name__ == "__main__":
     main()

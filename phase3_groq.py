@@ -1,5 +1,6 @@
 import os
 import time
+import itertools
 import pandas as pd
 import requests
 from core.preprocessing import serialize_row
@@ -7,8 +8,9 @@ from core.prompts import FEW_SHOT_COT
 from core.parser import extract_label
 from phase2_run_baselines import configure_dataset, DATASETS
 
-# Load Key
-GROQ_KEY = os.getenv("GROQ_API_KEY_PHASE3")
+# Load Keys for Rotation
+keys = [os.getenv('GROQ_API_KEY'), os.getenv('GROQ_API_KEY_PHASE3')]
+key_cycle = itertools.cycle([k for k in keys if k])
 
 def make_request_with_retry(url, headers, payload, timeout=30):
     """Exponential backoff to handle free-tier Rate Limits (HTTP 429)."""
@@ -28,9 +30,9 @@ def make_request_with_retry(url, headers, payload, timeout=30):
             time.sleep(2 ** attempt)
     return None
 
-def call_groq(prompt_sys, prompt_user, mode='standard'):
+def call_groq(prompt_sys, prompt_user, api_key, mode='standard'):
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [{"role": "system", "content": prompt_sys}, {"role": "user", "content": prompt_user}],
@@ -47,8 +49,8 @@ def call_groq(prompt_sys, prompt_user, mode='standard'):
     return "Error", -2
 
 def main():
-    if not GROQ_KEY:
-        print("Error: GROQ_API_KEY_PHASE3 not found in environment.")
+    if not any(keys):
+        print("Error: No Groq API keys found in environment.")
         return
 
     os.makedirs("result", exist_ok=True)
@@ -62,7 +64,7 @@ def main():
         results = []
         
         output_file = f"result/phase3_groq_{dataset_key}"
-        print(f"\n--- Running Groq Reasoning for {dataset_key} ---")
+        print(f"\n--- Running Groq (Load Balanced) for {dataset_key} ---")
         
         for i, row in sample.iterrows():
             start = time.time()
@@ -72,8 +74,11 @@ def main():
             
             p_cot = FEW_SHOT_COT[dataset_key]
             
+            # API Key Rotation
+            current_key = next(key_cycle)
+            
             # Single model call
-            _, lbl = call_groq(p_cot, text_row, 'cot')
+            _, lbl = call_groq(p_cot, text_row, current_key, 'cot')
             record["Llama_CoT_label"] = lbl
             
             results.append(record)
@@ -82,7 +87,7 @@ def main():
             # Row-by-row checkpointing
             pd.DataFrame(results).to_csv(output_file, index=False)
             
-            time.sleep(10) # Free Tier Rate Limit Protection
+            time.sleep(5) # Reduced delay due to load balancing
 
 if __name__ == "__main__":
     main()

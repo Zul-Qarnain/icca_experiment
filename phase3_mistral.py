@@ -1,5 +1,6 @@
 import os
 import time
+import itertools
 import pandas as pd
 import requests
 from core.preprocessing import serialize_row
@@ -7,8 +8,9 @@ from core.prompts import FEW_SHOT_COT
 from core.parser import extract_label
 from phase2_run_baselines import configure_dataset, DATASETS
 
-# Load Key
-MISTRAL_KEY = os.getenv("MISTRAL_API_KEY_PHASE3")
+# Load Keys for Rotation
+keys = [os.getenv('MISTRAL_API_KEY'), os.getenv('MISTRAL_API_KEY_PHASE3')]
+key_cycle = itertools.cycle([k for k in keys if k])
 
 def make_request_with_retry(url, headers, payload, timeout=30):
     """Exponential backoff to handle free-tier Rate Limits (HTTP 429)."""
@@ -28,9 +30,9 @@ def make_request_with_retry(url, headers, payload, timeout=30):
             time.sleep(2 ** attempt)
     return None
 
-def call_mistral(prompt_sys, prompt_user, mode='standard'):
+def call_mistral(prompt_sys, prompt_user, api_key, mode='standard'):
     url = "https://api.mistral.ai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {MISTRAL_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
         "model": "open-mistral-7b",
         "messages": [{"role": "system", "content": prompt_sys}, {"role": "user", "content": prompt_user}],
@@ -47,8 +49,8 @@ def call_mistral(prompt_sys, prompt_user, mode='standard'):
     return "Error", -2
 
 def main():
-    if not MISTRAL_KEY:
-        print("Error: MISTRAL_API_KEY_PHASE3 not found in environment.")
+    if not any(keys):
+        print("Error: No Mistral API keys found in environment.")
         return
 
     os.makedirs("result", exist_ok=True)
@@ -62,7 +64,7 @@ def main():
         results = []
         
         output_file = f"result/phase3_mistral_{dataset_key}"
-        print(f"\n--- Running Mistral Reasoning for {dataset_key} ---")
+        print(f"\n--- Running Mistral (Load Balanced) for {dataset_key} ---")
         
         for i, row in sample.iterrows():
             start = time.time()
@@ -72,8 +74,11 @@ def main():
             
             p_cot = FEW_SHOT_COT[dataset_key]
             
+            # API Key Rotation
+            current_key = next(key_cycle)
+            
             # Single model call
-            _, lbl = call_mistral(p_cot, text_row, 'cot')
+            _, lbl = call_mistral(p_cot, text_row, current_key, 'cot')
             record["Mistral_CoT_label"] = lbl
             
             results.append(record)
@@ -82,7 +87,7 @@ def main():
             # Row-by-row checkpointing
             pd.DataFrame(results).to_csv(output_file, index=False)
             
-            time.sleep(2) # Rate limit protection
+            time.sleep(1) # Reduced delay due to load balancing
 
 if __name__ == "__main__":
     main()
